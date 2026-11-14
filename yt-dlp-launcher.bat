@@ -44,6 +44,11 @@ $State = @{
 }
 
 $ErrorActionPreference = 'Continue'
+
+# この .bat と同じフォルダを PATH の先頭に追加（yt-dlp.exe 等を同じフォルダに置くだけでも動くように）
+if ($env:YTDL_SELF) {
+    $env:Path = (Split-Path -Parent $env:YTDL_SELF) + ';' + $env:Path
+}
 $Host.UI.RawUI.WindowTitle = 'yt-dlp ランチャー'
 
 # ---------------------------------------------------------------------
@@ -54,7 +59,8 @@ $Host.UI.RawUI.WindowTitle = 'yt-dlp ランチャー'
 function Update-SessionPath {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user    = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $env:Path = "$machine;$user"
+    $self    = if ($env:YTDL_SELF) { Split-Path -Parent $env:YTDL_SELF } else { '' }
+    $env:Path = "$self;$machine;$user"
 }
 
 function Test-Command([string]$Name) {

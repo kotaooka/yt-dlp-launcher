@@ -21,9 +21,70 @@ URL をコピーしてランチャーで Enter を押すだけで、最高画質
 - **依存ツールの確認と導入**: yt-dlp / FFmpeg / Deno がなければ、起動時に winget でインストールできる
 - **[u] でまとめて更新**: yt-dlp / Deno / FFmpeg を一度に更新する
 
+## 導入
+
+### 1. ランチャーを入手する
+
+次のどちらかの方法で入手し、`yt-dlp-launcher.bat` を好きな場所（デスクトップなど）に置きます。
+
+- **ZIP で入手**: このページの **Code → Download ZIP** でダウンロードし、展開する
+- **ファイル単体で入手**: [Releases](../../releases) があればそこから、なければ `yt-dlp-launcher.bat` を開いて **Download raw file** ボタンで保存する
+
+> ブラウザの「名前を付けて保存」を使うと、`yt-dlp-launcher.bat.txt` になってしまうことがあります。その場合は拡張子を `.bat` に戻してください。
+
+### 2. yt-dlp・FFmpeg・Deno を入れる
+
+ランチャーを動かすには、次の 3 つのツールが必要です。
+
+| ツール | 用途 | 必須か |
+|---|---|---|
+| [yt-dlp](https://github.com/yt-dlp/yt-dlp) | ダウンロード本体 | 必須 |
+| [FFmpeg](https://ffmpeg.org/) | 映像と音声の結合、mp3 への変換、サムネの埋め込み | 実質必須（ないと最高画質の映像と音声が別ファイルのまま残る） |
+| [Deno](https://deno.com/) | YouTube の JavaScript チャレンジを解く | YouTube を使うなら必須（2025-11 以降の yt-dlp で必要） |
+
+方法は次の 3 通りです。どれか 1 つで構いません。
+
+**A. ランチャーに任せる（いちばん簡単）**
+
+`yt-dlp-launcher.bat` をダブルクリックで起動します。足りないツールがあれば「winget でインストールしますか？」と聞かれるので、`Y` を押します。
+
+**B. 自分で winget を使って入れる**
+
+PowerShell かターミナルで次のコマンドを実行します。
+
+```powershell
+winget install yt-dlp.yt-dlp
+winget install Gyan.FFmpeg
+winget install DenoLand.Deno
+```
+
+入れた後は、ターミナルを開き直してから次のコマンドで確認します（それぞれバージョンが表示されれば OK）。
+
+```powershell
+yt-dlp --version
+ffmpeg -version
+deno --version
+```
+
+**C. winget を使わずに入れる**
+
+それぞれの配布ページから exe をダウンロードし、**`yt-dlp-launcher.bat` と同じフォルダ**に置きます。ランチャーは起動時に自分のフォルダを PATH に加えるので、PATH の設定は要りません。
+
+- yt-dlp: [Releases](https://github.com/yt-dlp/yt-dlp/releases/latest) の `yt-dlp.exe`
+- FFmpeg: [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) の essentials ビルドを展開し、`bin` 内の `ffmpeg.exe` と `ffprobe.exe`
+- Deno: [Releases](https://github.com/denoland/deno/releases/latest) の `deno-x86_64-pc-windows-msvc.zip` を展開した `deno.exe`
+
+この方法で入れた場合、[u] キーでは更新できません。それぞれ新しい exe に置き換えてください（yt-dlp だけは `yt-dlp.exe -U` で自動更新できます）。
+
+### 3. 初回起動時の警告
+
+インターネットから入手した `.bat` を初めて開くと、「Windows によって PC が保護されました」と表示されることがあります。その場合は **詳細情報 → 実行** で起動します。
+
+毎回表示される場合は、ファイルを右クリック → **プロパティ** →「許可する」にチェックを入れて OK を押してください。
+
 ## 使い方
 
-1. `yt-dlp-launcher.bat` を好きな場所に置いて、ダブルクリックで起動する
+1. `yt-dlp-launcher.bat` をダブルクリックで起動する
 2. 落としたい動画の URL をコピーし、ランチャーで Enter を押す
 
 | キー | 動作 |
@@ -50,8 +111,21 @@ URL をコピーしてランチャーで Enter を押すだけで、最高画質
 
 ## 動作環境
 
-- Windows 11 / Windows PowerShell 5.1（Windows に標準で入っているもの）
-- yt-dlp（必須）、FFmpeg（映像と音声の結合・変換に使う）、Deno（YouTube の JS チャレンジに使う）
+- Windows 11（Windows 10 でも動く想定）
+- Windows PowerShell 5.1（Windows に標準で入っているもの。PowerShell 7 は不要）
+- yt-dlp / FFmpeg / Deno（[導入](#導入)を参照）
+
+## うまくいかないとき
+
+| 症状 | 対処 |
+|---|---|
+| `Sign in to confirm you're not a bot` / `HTTP Error 403` | まず [u] で更新する。直らなければ [c] で cookie を ON にする |
+| `Unsupported URL` | そのサイトには yt-dlp が対応していない。ブラウザの開発者ツール（F12）のネットワークタブで `.m3u8` を探し、そのURLを貼る |
+| 映像と音声が別ファイルのまま残る | FFmpeg が入っていない |
+| YouTube だけ失敗する | Deno が入っていない、または yt-dlp が古い |
+| cookie を ON にしても失敗する | Chrome の cookie は読めないことが多い。Firefox でログインし、`CookieBrowser` を `firefox` にする |
+
+それでも原因が分からないときは、PowerShell で `yt-dlp -v "URL"` を実行すると詳しいログが見られます。
 
 ## 仕組み
 
