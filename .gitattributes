@@ -1,0 +1,3 @@
+# .bat は Windows で動かすため、チェックアウト時に CRLF にする
+*.bat text eol=crlf
+*.md  text eol=lf
