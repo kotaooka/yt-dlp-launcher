@@ -15,16 +15,23 @@ exit /b %errorlevel%
 #  cmd 部分を壊さないよう、このファイルは BOM なし UTF-8 で保存すること。
 # =====================================================================
 
-# ===== 設定（必要に応じて書き換える）=====
-$Config = @{
-    # 保存先（既定はデスクトップ。OneDrive にリダイレクトされていても正しく解決される）
-    OutDir        = [Environment]::GetFolderPath('Desktop')
-    # cookie を読むブラウザ（firefox 推奨。Windows 版 Chrome は暗号化の変更で読めないことが多い）
+# ===== 設定 =====
+# 設定はこの .bat と同じフォルダの yt-dlp-launcher.json に保存する（初回起動時に作成）。
+# .bat を新しい版に差し替えても設定は残る。[m][c][p] で切り替えた状態も保存される。
+#   OutDir        : 保存先。空ならデスクトップ（OneDrive にリダイレクトされていても正しく解決される）
+#                   %USERPROFILE% などの環境変数も使える。JSON なので \ は \\ と書くか / を使う
+#   CookieBrowser : cookie を読むブラウザ（firefox 推奨。Windows 版 Chrome は暗号化の変更で読めないことが多い）
+#   TitleBytes    : ファイル名のタイトル部分の上限（バイト）。Windows のファイル名長制限対策
+#   Mode          : ダウンロードモード（下の $Modes のキー）
+#   Cookies       : cookie を使うか（true / false）
+#   Playlist      : 再生リストを全部落とすか（true / false）
+$Defaults = [ordered]@{
+    OutDir        = ''
     CookieBrowser = 'firefox'
-    # ファイル名のタイトル部分の上限（バイト）。Windows のファイル名長制限対策
     TitleBytes    = 80
-    # 起動時の既定モード（下の $Modes のキー）
-    DefaultMode   = '1'
+    Mode          = '1'
+    Cookies       = $false
+    Playlist      = $false
 }
 
 # ===== ダウンロードモード =====
@@ -35,19 +42,20 @@ $Modes = [ordered]@{
     '4' = @{ Name = '音声のみ (元の形式・無変換)';   Args = @('-x', '--audio-format', 'best') }
 }
 
-# ===== 実行時の状態 =====
-$State = @{
-    Mode     = $Config.DefaultMode
-    Cookies  = $false
-    Playlist = $false
-    LastUrl  = $null
-}
-
 $ErrorActionPreference = 'Continue'
 
+# この .bat のあるフォルダ
+$SelfDir = if ($env:YTDL_SELF) { Split-Path -Parent $env:YTDL_SELF } else { (Get-Location).Path }
+
 # この .bat と同じフォルダを PATH の先頭に追加（yt-dlp.exe 等を同じフォルダに置くだけでも動くように）
-if ($env:YTDL_SELF) {
-    $env:Path = (Split-Path -Parent $env:YTDL_SELF) + ';' + $env:Path
+$env:Path = $SelfDir + ';' + $env:Path
+
+$ConfigPath = Join-Path $SelfDir 'yt-dlp-launcher.json'
+
+# ===== 実行時の状態 =====
+$State = @{
+    # このセッションでダウンロードに成功した URL（クリップボードの URL を二重に処理しないため）
+    Done = New-Object 'System.Collections.Generic.HashSet[string]'
 }
 $Host.UI.RawUI.WindowTitle = 'yt-dlp ランチャー'
 
@@ -59,12 +67,24 @@ $Host.UI.RawUI.WindowTitle = 'yt-dlp ランチャー'
 function Update-SessionPath {
     $machine = [Environment]::GetEnvironmentVariable('Path', 'Machine')
     $user    = [Environment]::GetEnvironmentVariable('Path', 'User')
-    $self    = if ($env:YTDL_SELF) { Split-Path -Parent $env:YTDL_SELF } else { '' }
-    $env:Path = "$self;$machine;$user"
+    $env:Path = "$SelfDir;$machine;$user"
 }
 
 function Test-Command([string]$Name) {
     return [bool](Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue)
+}
+
+# コマンドの実体のフルパス（見つからなければ $null）
+function Get-CommandSource([string]$Name) {
+    $c = Get-Command $Name -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1
+    if ($c) { return $c.Source } else { return $null }
+}
+
+# そのファイルがこの .bat と同じフォルダにあるか
+function Test-InSelfDir([string]$Path) {
+    $dir = [IO.Path]::GetFullPath((Split-Path -Parent $Path)).TrimEnd('\')
+    $self = [IO.Path]::GetFullPath($SelfDir).TrimEnd('\')
+    return [string]::Equals($dir, $self, [StringComparison]::OrdinalIgnoreCase)
 }
 
 # 引数配列を Windows のコマンドライン文字列に変換（空白や " を含む引数を正しくクォート）
@@ -98,6 +118,62 @@ function Write-Info([string]$Text) { Write-Host $Text -ForegroundColor Cyan }
 function Write-Ok([string]$Text)   { Write-Host $Text -ForegroundColor Green }
 function Write-Warn([string]$Text) { Write-Host $Text -ForegroundColor Yellow }
 function Write-Err([string]$Text)  { Write-Host $Text -ForegroundColor Red }
+
+# 設定ファイルを読み込む（無ければ既定値で作成）。足りない項目・おかしな値は既定値で補う
+function Import-Config {
+    $cfg = [ordered]@{}
+    foreach ($k in $Defaults.Keys) { $cfg[$k] = $Defaults[$k] }
+
+    $script:ConfigReadOnly = $false
+    if (Test-Path -LiteralPath $ConfigPath) {
+        try {
+            $json = [IO.File]::ReadAllText($ConfigPath, [Text.Encoding]::UTF8) | ConvertFrom-Json -ErrorAction Stop
+            foreach ($p in $json.PSObject.Properties) {
+                if ($cfg.Contains($p.Name) -and $null -ne $p.Value) { $cfg[$p.Name] = $p.Value }
+            }
+        } catch {
+            # 書き損じた設定ファイルを上書きして消さないよう、このセッションでは保存しない
+            Write-Warn ("設定ファイルを読めませんでした。既定値で起動し、設定は保存しません。")
+            Write-Warn ("  {0}" -f $ConfigPath)
+            Write-Warn ("  {0}" -f $_.Exception.Message)
+            $script:ConfigReadOnly = $true
+        }
+    }
+
+    $cfg.OutDir        = [string]$cfg.OutDir
+    $cfg.CookieBrowser = ([string]$cfg.CookieBrowser).Trim()
+    if (-not $cfg.CookieBrowser) { $cfg.CookieBrowser = $Defaults.CookieBrowser }
+    $n = 0
+    if (-not [int]::TryParse([string]$cfg.TitleBytes, [ref]$n) -or $n -lt 20) { $n = $Defaults.TitleBytes }
+    $cfg.TitleBytes = $n
+    $cfg.Mode = [string]$cfg.Mode
+    if (-not $Modes.Contains($cfg.Mode)) { $cfg.Mode = $Defaults.Mode }
+    # true / "true" のどちらで書かれていても受け付ける
+    $cfg.Cookies  = ([string]$cfg.Cookies  -eq 'true')
+    $cfg.Playlist = ([string]$cfg.Playlist -eq 'true')
+
+    $script:Config = $cfg
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { Save-Config }
+}
+
+# 設定ファイルに保存（BOM なし UTF-8）
+function Save-Config {
+    if ($script:ConfigReadOnly) { return }
+    try {
+        $json = [pscustomobject]$Config | ConvertTo-Json
+        [IO.File]::WriteAllText($ConfigPath, $json, (New-Object Text.UTF8Encoding($false)))
+    } catch {
+        Write-Warn ("設定を保存できませんでした: {0}" -f $_.Exception.Message)
+        $script:ConfigReadOnly = $true
+    }
+}
+
+# 保存先の実際のパス（空ならデスクトップ。環境変数を展開し、/ は \ に直す）
+function Resolve-OutDir {
+    $d = $Config.OutDir.Trim()
+    if (-not $d) { return [Environment]::GetFolderPath('Desktop') }
+    return ([Environment]::ExpandEnvironmentVariables($d) -replace '/', '\')
+}
 
 # 依存ツールの確認と、足りないものの winget インストール
 function Initialize-Dependencies {
@@ -134,33 +210,67 @@ function Initialize-Dependencies {
 }
 
 # yt-dlp・Deno・FFmpeg をまとめて更新
+# 実際に使われる exe の場所で更新方法を変える。
+# （この .bat と同じフォルダの exe は PATH の先頭なので、winget で更新しても使われるのは古いまま）
 function Update-Tools {
-    if (Test-Command 'winget.exe') {
-        foreach ($id in @('yt-dlp.yt-dlp', 'DenoLand.Deno', 'Gyan.FFmpeg')) {
-            Write-Info ("更新確認: {0}" -f $id)
-            [void](Invoke-Native 'winget.exe' @('upgrade', '--id', $id, '-e', '--accept-source-agreements', '--accept-package-agreements'))
+    $tools = @(
+        @{ Cmd = 'yt-dlp.exe'; Id = 'yt-dlp.yt-dlp'; Name = 'yt-dlp' },
+        @{ Cmd = 'deno.exe';   Id = 'DenoLand.Deno'; Name = 'Deno'   },
+        @{ Cmd = 'ffmpeg.exe'; Id = 'Gyan.FFmpeg';   Name = 'FFmpeg' }
+    )
+    $hasWinget = Test-Command 'winget.exe'
+
+    foreach ($t in $tools) {
+        $src = Get-CommandSource $t.Cmd
+        if (-not $src) {
+            Write-Warn ("{0} が見つかりません（スキップ）" -f $t.Name)
+            continue
         }
-        Update-SessionPath
-    } else {
-        [void](Invoke-Native 'yt-dlp.exe' @('-U'))
+        if (Test-InSelfDir $src) {
+            # 同じフォルダに置いた exe は自己更新するか、手動で差し替える
+            switch ($t.Name) {
+                'yt-dlp' { Write-Info 'yt-dlp を更新（同じフォルダの exe）'; [void](Invoke-Native $src @('-U')) }
+                'Deno'   { Write-Info 'Deno を更新（同じフォルダの exe）';   [void](Invoke-Native $src @('upgrade')) }
+                default  { Write-Warn ("{0} は同じフォルダの exe なので自動更新できません。新しい版を手動で差し替えてください。" -f $t.Name) }
+            }
+        } elseif ($hasWinget) {
+            Write-Info ("更新確認: {0}" -f $t.Id)
+            [void](Invoke-Native 'winget.exe' @('upgrade', '--id', $t.Id, '-e', '--accept-source-agreements', '--accept-package-agreements'))
+        } elseif ($t.Name -eq 'yt-dlp') {
+            [void](Invoke-Native $src @('-U'))
+        } else {
+            Write-Warn ("{0} は winget がないため自動更新できません。" -f $t.Name)
+        }
     }
-    Write-Ok ('yt-dlp のバージョン: ' + (yt-dlp.exe --version))
+    Update-SessionPath
+    $ver = Get-CommandSource 'yt-dlp.exe'
+    if ($ver) { Write-Ok ('yt-dlp のバージョン: ' + (& $ver --version)) }
 }
 
-# クリップボードから http(s) の URL を取り出す（複数行なら全部）
+# 文字列から http(s) の URL を取り出す（空白・改行区切りで複数可、重複は除く）
+# 「」や () で囲まれていたり、文末の 。 . , が付いていたりしても URL 部分だけを取る
+function Get-UrlsFromText([string]$Text) {
+    if (-not $Text) { return @() }
+    $seen = New-Object 'System.Collections.Generic.HashSet[string]'
+    $urls = foreach ($m in [regex]::Matches($Text, 'https?://[^\s"''<>`「」『』【】（）＜＞、。，．！？]+')) {
+        $u = $m.Value.TrimEnd('.', ',', ';', ':', '!', '?')
+        # 末尾の ) は、URL 内に対応する ( がなければ外側の括弧とみなして外す
+        while ($u.EndsWith(')') -and ($u.Split('(').Count -lt $u.Split(')').Count)) {
+            $u = $u.Substring(0, $u.Length - 1).TrimEnd('.', ',', ';', ':', '!', '?')
+        }
+        if ($u -match '^https?://.+' -and $seen.Add($u)) { $u }
+    }
+    return @($urls)
+}
+
+# クリップボードから URL を取り出す
 function Get-ClipboardUrls {
     try {
         $text = Get-Clipboard -Raw -ErrorAction Stop
     } catch {
         return @()
     }
-    if (-not $text) { return @() }
-    return @([regex]::Matches($text, 'https?://\S+') | ForEach-Object { $_.Value })
-}
-
-# 入力文字列から URL を取り出す（空白・改行区切りで複数可、前後の " は除去）
-function Get-UrlsFromText([string]$Text) {
-    return @([regex]::Matches($Text, 'https?://[^\s"]+') | ForEach-Object { $_.Value })
+    return Get-UrlsFromText $text
 }
 
 # 動画ファイルの直リンクか（ページ URL ではないか）
@@ -180,12 +290,12 @@ function Get-SignedUrlExpiry([string]$Url) {
 }
 
 function Show-Status {
-    $mode = $Modes[$State.Mode].Name
-    $cookie = if ($State.Cookies) { "ON（$($Config.CookieBrowser)）" } else { 'OFF' }
-    $pl = if ($State.Playlist) { 'ON（全部）' } else { 'OFF（1本だけ）' }
+    $mode = $Modes[$Config.Mode].Name
+    $cookie = if ($Config.Cookies) { "ON（$($Config.CookieBrowser)）" } else { 'OFF' }
+    $pl = if ($Config.Playlist) { 'ON（全部）' } else { 'OFF（1本だけ）' }
     Write-Host ''
     Write-Host '──────────────────────────────────────────────' -ForegroundColor DarkGray
-    Write-Host (" 保存先: {0}" -f $Config.OutDir)
+    Write-Host (" 保存先: {0}" -f $OutDir)
     Write-Host (" モード: {0}   cookie: {1}   再生リスト: {2}" -f $mode, $cookie, $pl)
     Write-Host ' [m]モード  [c]cookie  [p]再生リスト  [o]保存先を開く  [u]更新  [q]終了' -ForegroundColor DarkGray
     Write-Host '──────────────────────────────────────────────' -ForegroundColor DarkGray
@@ -193,32 +303,49 @@ function Show-Status {
 
 function Select-Mode {
     foreach ($k in $Modes.Keys) {
-        $mark = if ($k -eq $State.Mode) { '*' } else { ' ' }
+        $mark = if ($k -eq $Config.Mode) { '*' } else { ' ' }
         Write-Host (" {0} [{1}] {2}" -f $mark, $k, $Modes[$k].Name)
     }
     $ans = (Read-Host '番号を入力（Enter で変更しない）').Trim()
     if ($Modes.Contains($ans)) {
-        $State.Mode = $ans
+        $Config.Mode = $ans
+        Save-Config
         Write-Ok ("モード: {0}" -f $Modes[$ans].Name)
     }
+}
+
+# ファイル名に使えない文字を _ に置き換える
+function Get-SafeFileName([string]$Name) {
+    $s = ($Name -replace '[\\/:*?"<>|\x00-\x1f]', '_').Trim().TrimEnd('.', ' ')
+    if ($s.Length -gt 120) { $s = $s.Substring(0, 120).TrimEnd('.', ' ') }
+    return $s
+}
+
+# 保存先に同じ名前（拡張子違いを含む）があれば "名前 (2)" のように番号を付ける
+function Get-UniqueBaseName([string]$Dir, [string]$Base) {
+    $names = [System.Collections.Generic.HashSet[string]]::new([StringComparer]::OrdinalIgnoreCase)
+    if (Test-Path -LiteralPath $Dir) {
+        foreach ($f in [IO.Directory]::EnumerateFiles($Dir)) {
+            [void]$names.Add([IO.Path]::GetFileNameWithoutExtension($f))
+        }
+    }
+    $cand = $Base
+    $i = 2
+    while ($names.Contains($cand)) {
+        $cand = "$Base ($i)"
+        $i++
+    }
+    return $cand
 }
 
 # 1 本ダウンロードする。成功なら $true
 function Invoke-Download([string]$Url) {
     $tb = $Config.TitleBytes
-    $ytArgs = @()
-    $ytArgs += $Modes[$State.Mode].Args
-    $ytArgs += @(
-        '--embed-metadata', '--embed-thumbnail', '--embed-chapters',
-        '--progress', '--console-title', '--windows-filenames',
-        '-P', $Config.OutDir,
-        '-o', "%(title).${tb}B [%(id).20B].%(ext)s"
-    )
-    if ($State.Playlist) { $ytArgs += '--yes-playlist' } else { $ytArgs += '--no-playlist' }
-    if ($State.Cookies)  { $ytArgs += @('--cookies-from-browser', $Config.CookieBrowser) }
+    $outTmpl = "%(title).${tb}B [%(id).20B].%(ext)s"
 
     $direct = Test-DirectMedia $Url
     $expiry = Get-SignedUrlExpiry $Url
+    $ref = ''
     if ($direct) {
         Write-Warn '動画ファイルの直リンクです。'
         if ($expiry) {
@@ -230,8 +357,30 @@ function Invoke-Download([string]$Url) {
             Write-Warn ("URLの有効期限: {0:yyyy-MM-dd HH:mm}（残り約 {1} 分）" -f $expiry, $left)
         }
         $ref = (Read-Host '元ページのURL（403 対策。不要なら Enter）').Trim().Trim('"')
-        if ($ref) { $ytArgs += @('--referer', $ref) }
+
+        # 直リンクは URL の末尾（master.m3u8 なら master）がタイトルと ID になり、
+        # 別の動画でも同じファイル名になって「ダウンロード済み」と判断され飛ばされる。
+        # そのためファイル名をここで決め、既存ファイルと重ならないようにする。
+        $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+        $name = Get-SafeFileName ((Read-Host ("ファイル名（拡張子なし。Enter で {0}）" -f $stamp)).Trim().Trim('"'))
+        if (-not $name) { $name = $stamp }
+        $name = Get-UniqueBaseName $OutDir $name
+        # % は yt-dlp の出力テンプレートの記号なので %% にする
+        $outTmpl = ($name -replace '%', '%%') + '.%(ext)s'
+        Write-Info ("保存名: {0}" -f $name)
     }
+
+    $ytArgs = @()
+    $ytArgs += $Modes[$Config.Mode].Args
+    $ytArgs += @(
+        '--embed-metadata', '--embed-thumbnail', '--embed-chapters',
+        '--progress', '--console-title', '--windows-filenames',
+        '-P', $OutDir,
+        '-o', $outTmpl
+    )
+    if ($Config.Playlist) { $ytArgs += '--yes-playlist' } else { $ytArgs += '--no-playlist' }
+    if ($Config.Cookies)  { $ytArgs += @('--cookies-from-browser', $Config.CookieBrowser) }
+    if ($ref)             { $ytArgs += @('--referer', $ref) }
 
     Write-Info ("ダウンロード開始: {0}" -f $Url)
     $ytArgs += @('--', $Url)
@@ -257,21 +406,25 @@ function Invoke-Download([string]$Url) {
 # ---------------------------------------------------------------------
 # メイン
 # ---------------------------------------------------------------------
+Import-Config
+$OutDir = Resolve-OutDir
+
 if (-not (Initialize-Dependencies)) {
     Read-Host 'Enter で終了'
     exit 1
 }
-if (-not (Test-Path -LiteralPath $Config.OutDir)) {
-    New-Item -ItemType Directory -Path $Config.OutDir | Out-Null
+if (-not (Test-Path -LiteralPath $OutDir)) {
+    New-Item -ItemType Directory -Path $OutDir | Out-Null
 }
 
 Write-Ok 'URL をコピーしてから Enter を押すとダウンロードします（URL を直接貼り付けても可、複数可）。'
+Write-Host (" 設定ファイル: {0}" -f $ConfigPath) -ForegroundColor DarkGray
 
 :main while ($true) {
     Show-Status
 
-    # クリップボードの URL（直前にダウンロードしたものは除く）
-    $clipUrls = @(Get-ClipboardUrls | Where-Object { $_ -ne $State.LastUrl })
+    # クリップボードの URL（このセッションでダウンロード済みのものは除く）
+    $clipUrls = @(Get-ClipboardUrls | Where-Object { -not $State.Done.Contains($_) })
     if ($clipUrls.Count -gt 0) {
         $preview = $clipUrls[0]
         if ($preview.Length -gt 90) { $preview = $preview.Substring(0, 90) + '…' }
@@ -289,9 +442,9 @@ Write-Ok 'URL をコピーしてから Enter を押すとダウンロードし�
     switch -Regex ($cmd) {
         '^q$' { break main }
         '^m$' { Select-Mode; continue main }
-        '^c$' { $State.Cookies = -not $State.Cookies; continue main }
-        '^p$' { $State.Playlist = -not $State.Playlist; continue main }
-        '^o$' { Start-Process explorer.exe $Config.OutDir; continue main }
+        '^c$' { $Config.Cookies  = -not $Config.Cookies;  Save-Config; continue main }
+        '^p$' { $Config.Playlist = -not $Config.Playlist; Save-Config; continue main }
+        '^o$' { Start-Process explorer.exe $OutDir; continue main }
         '^u$' { Update-Tools; continue main }
     }
 
@@ -299,7 +452,8 @@ Write-Ok 'URL をコピーしてから Enter を押すとダウンロードし�
         $urls = $clipUrls
         if ($urls.Count -eq 0) { continue main }
     } else {
-        $urls = Get-UrlsFromText $cmd
+        # 直接入力した URL は処理済みでもダウンロードする（やり直したいとき用）
+        $urls = @(Get-UrlsFromText $cmd)
         if ($urls.Count -eq 0) {
             Write-Warn 'URL が見つかりません（http:// か https:// で始まるものを入れてください）。'
             continue main
@@ -308,8 +462,11 @@ Write-Ok 'URL をコピーしてから Enter を押すとダウンロードし�
 
     $ok = 0
     foreach ($u in $urls) {
-        if (Invoke-Download $u) { $ok++ }
-        $State.LastUrl = $u
+        # 成功したものだけ処理済みにする（失敗したものは [c] などで設定を変えて Enter で再試行できる）
+        if (Invoke-Download $u) {
+            $ok++
+            [void]$State.Done.Add($u)
+        }
     }
     if ($urls.Count -gt 1) {
         Write-Info ("{0} 件中 {1} 件成功" -f $urls.Count, $ok)

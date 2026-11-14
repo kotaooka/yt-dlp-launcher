@@ -17,9 +17,11 @@ URL をコピーしてランチャーで Enter を押すだけで、最高画質
 - **動画ファイルの直リンク（`.m3u8` / `.mp4` など）に対応**
   - 署名付き URL なら有効期限と残り時間を表示する
   - 403 対策として、元ページの URL（Referer）を入力できる
+  - ファイル名を入力できる（Enter で日時）。同じ名前のファイルがあれば `名前 (2)` のように番号を付ける
 - **ファイル名を自動で切り詰める**: Windows のファイル名長の制限で `[Errno 22]` になるのを防ぐ
 - **依存ツールの確認と導入**: yt-dlp / FFmpeg / Deno がなければ、起動時に winget でインストールできる
 - **[u] でまとめて更新**: yt-dlp / Deno / FFmpeg を一度に更新する
+- **設定を保存**: 保存先やモード、cookie・再生リストの ON/OFF を `yt-dlp-launcher.json` に保存する。`.bat` を新しい版に差し替えても設定は残る
 
 ## 導入
 
@@ -74,7 +76,7 @@ deno --version
 - FFmpeg: [gyan.dev](https://www.gyan.dev/ffmpeg/builds/) の essentials ビルドを展開し、`bin` 内の `ffmpeg.exe` と `ffprobe.exe`
 - Deno: [Releases](https://github.com/denoland/deno/releases/latest) の `deno-x86_64-pc-windows-msvc.zip` を展開した `deno.exe`
 
-この方法で入れた場合、[u] キーでは更新できません。それぞれ新しい exe に置き換えてください（yt-dlp だけは `yt-dlp.exe -U` で自動更新できます）。
+この方法で入れた場合、[u] キーでは yt-dlp（`yt-dlp -U`）と Deno（`deno upgrade`）を自動で更新します。FFmpeg は新しい exe に手動で置き換えてください。
 
 ### 3. 初回起動時の警告
 
@@ -89,8 +91,8 @@ deno --version
 
 | キー | 動作 |
 |---|---|
-| Enter | クリップボードの URL をダウンロード |
-| URL を貼り付けて Enter | その URL をダウンロード（複数可） |
+| Enter | クリップボードの URL をダウンロード（このウィンドウでダウンロード済みの URL は除く） |
+| URL を貼り付けて Enter | その URL をダウンロード（複数可。ダウンロード済みでももう一度落とす） |
 | `m` | モードを切り替え |
 | `c` | cookie の ON/OFF |
 | `p` | 再生リストの ON/OFF |
@@ -100,14 +102,29 @@ deno --version
 
 ## 設定
 
-ファイル先頭近くの `$Config` を書き換えます。
+初回起動時に、`.bat` と同じフォルダに `yt-dlp-launcher.json` ができます。メモ帳などで書き換え、ランチャーを起動し直すと反映されます。`m` `c` `p` で切り替えた内容も自動で保存されるので、次回もその状態で起動します。
+
+```json
+{
+    "OutDir":  "",
+    "CookieBrowser":  "firefox",
+    "TitleBytes":  80,
+    "Mode":  "1",
+    "Cookies":  false,
+    "Playlist":  false
+}
+```
 
 | 項目 | 既定値 | 内容 |
 |---|---|---|
-| `OutDir` | デスクトップ | 保存先 |
+| `OutDir` | `""`（デスクトップ） | 保存先。`%USERPROFILE%\\Videos` のように環境変数も使える。JSON なので `\` は `\\` と書くか `/` を使う（例: `"D:/Videos"`） |
 | `CookieBrowser` | `firefox` | cookie を読むブラウザ。Windows 版 Chrome は暗号化方式の変更により読めないことが多い |
 | `TitleBytes` | `80` | ファイル名のタイトル部分の上限（バイト） |
-| `DefaultMode` | `1` | 起動時のモード |
+| `Mode` | `"1"` | ダウンロードモード（`1`〜`4`） |
+| `Cookies` | `false` | cookie を使うか |
+| `Playlist` | `false` | 再生リストを全部落とすか |
+
+JSON の書き方を間違えると、起動時に警告を出して既定値で動きます（書き損じたファイルは上書きしません）。
 
 ## 動作環境
 
