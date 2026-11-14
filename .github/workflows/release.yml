@@ -1,0 +1,49 @@
+# v で始まるタグ（例: v1.2.0）を push すると、リリースを作って yt-dlp-launcher.bat を添付する。
+# リリースノートは注釈付きタグのメッセージを使う（git tag -a v1.2.0 -F notes.md）。
+# メッセージが空なら、前のタグからの変更点を自動生成する。
+name: release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # checkout はタグを軽量タグとして取ってくるので、注釈付きタグのメッセージを読むために取り直す
+      - name: タグを取得
+        run: git fetch --force origin "refs/tags/${GITHUB_REF_NAME}:refs/tags/${GITHUB_REF_NAME}"
+
+      # .gitattributes（*.bat text eol=crlf）により CRLF でチェックアウトされているはず。
+      # LF や BOM 付きの .bat は cmd で正しく動かないので、ここで止める
+      - name: .bat の改行コードと BOM を確認
+        run: |
+          f=yt-dlp-launcher.bat
+          lines=$(wc -l < "$f")
+          crlf=$(grep -c $'\r$' "$f" || true)
+          echo "行数: $lines / CRLF の行: $crlf"
+          if [ "$lines" -ne "$crlf" ]; then echo "::error::$f が CRLF になっていません"; exit 1; fi
+          if [ "$(head -c 3 "$f" | od -An -tx1 | tr -d ' ')" = "efbbbf" ]; then echo "::error::$f に BOM が付いています"; exit 1; fi
+
+      - name: リリースを作成
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          if [ "$(git cat-file -t "$tag")" = "tag" ]; then
+            git tag -l --format='%(contents)' "$tag" | sed '/-----BEGIN PGP SIGNATURE-----/,$d' > notes.md
+          else
+            : > notes.md
+          fi
+          if [ -s notes.md ] && grep -q '[^[:space:]]' notes.md; then
+            gh release create "$tag" yt-dlp-launcher.bat --title "$tag" --notes-file notes.md --verify-tag
+          else
+            gh release create "$tag" yt-dlp-launcher.bat --title "$tag" --generate-notes --verify-tag
+          fi
