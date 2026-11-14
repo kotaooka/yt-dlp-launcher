@@ -27,10 +27,10 @@ URL をコピーしてランチャーで Enter を押すだけで、最高画質
 
 次のどちらかの方法で入手し、`yt-dlp-launcher.bat` を好きな場所（デスクトップなど）に置きます。
 
+- **[Releases](../../releases/latest) から入手（推奨）**: **Assets** にある `yt-dlp-launcher.bat` をダウンロードする
 - **ZIP で入手**: このページの **Code → Download ZIP** でダウンロードし、展開する
-- **ファイル単体で入手**: [Releases](../../releases) があればそこから、なければ `yt-dlp-launcher.bat` を開いて **Download raw file** ボタンで保存する
 
-> ブラウザの「名前を付けて保存」を使うと、`yt-dlp-launcher.bat.txt` になってしまうことがあります。その場合は拡張子を `.bat` に戻してください。
+> **ファイル一覧の画面から `yt-dlp-launcher.bat` を開き、Raw や Download raw file で保存したものは動きません。** この方法だと改行コードが LF のまま保存されるためで、cmd は CRLF でないと正しく読めません。Releases か ZIP から入手してください。
 
 ### 2. yt-dlp・FFmpeg・Deno を入れる
 
