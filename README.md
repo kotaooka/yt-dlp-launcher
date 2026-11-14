@@ -1,4 +1,4 @@
-# yt-dlp-launcher
+# yt-dlpランチャー（yt-dlp-launcher）
 
 [yt-dlp](https://github.com/yt-dlp/yt-dlp) をダブルクリックで使うための Windows 用ランチャーです。ファイルは `.bat` ひとつだけです。
 
@@ -140,3 +140,7 @@ cmd 部分を壊さないように、**BOM なし UTF-8** で保存してくだ�
 
 - DRM で保護された配信はダウンロードできません
 - 著作権や各サイトの利用規約の範囲内で使ってください
+
+## ライセンス
+
+MIT License
